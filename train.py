@@ -29,7 +29,9 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=train_cfg.batch_size)
     p.add_argument("--lr", type=float, default=train_cfg.learning_rate)
     p.add_argument("--memory_size", type=int, default=model_cfg.memory_size)
-    p.add_argument("--freeze_encoder", action="store_true", default=model_cfg.freeze_encoder)
+    p.add_argument(
+        "--freeze_encoder", action="store_true", default=model_cfg.freeze_encoder
+    )
     p.add_argument("--checkpoint_dir", default=str(train_cfg.checkpoint_dir))
     p.add_argument("--resume", default=None, help="Path to checkpoint to resume from")
     return p.parse_args()
@@ -70,7 +72,7 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6, verbose=True
+        optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-6
     )
     criterion = TotalLoss(
         lambda_ssim=train_cfg.lambda_ssim,
@@ -118,15 +120,28 @@ def main():
         # Checkpoint
         if (epoch + 1) % train_cfg.save_every == 0:
             path = checkpoint_dir / f"epoch_{epoch+1:03d}.pth"
-            torch.save({"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict()}, path)
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                },
+                path,
+            )
 
         # Best model + early stopping
         avg = total_loss / n
         if avg < best_loss:
             best_loss = avg
             patience_counter = 0
-            torch.save({"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict()},
-                       checkpoint_dir / "best.pth")
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                },
+                checkpoint_dir / "best.pth",
+            )
         else:
             patience_counter += 1
             if patience_counter >= train_cfg.patience:
