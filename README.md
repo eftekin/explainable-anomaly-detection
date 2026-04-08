@@ -88,7 +88,7 @@ explainable-anomaly-detection/
 ## Installation
 
 ```bash
-git clone https://github.com/meftekin/explainable-anomaly-detection.git
+git clone https://github.com/eftekin/explainable-anomaly-detection.git
 cd explainable-anomaly-detection
 pip install -r requirements.txt
 ```

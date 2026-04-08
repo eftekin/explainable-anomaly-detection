@@ -28,14 +28,14 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     # Table 1 hyperparameters
-    learning_rate: float = 0.0002
+    learning_rate: float = 0.0001
     batch_size: int = 8
     epochs: int = 200
     optimizer: str = "adam"
 
     # Loss weights (from paper notation)
     lambda_ssim: float = 1.0       # weight for SSIM term in reconstruction loss
-    lambda_entropy: float = 0.001  # weight for entropy loss (memory)
+    lambda_entropy: float = 0.1    # weight for entropy loss (memory)
 
     # Data
     num_workers: int = 2
@@ -46,7 +46,7 @@ class TrainConfig:
     checkpoint_dir: Path = Path("results/checkpoints")
 
     # Early stopping
-    patience: int = 20
+    patience: int = 200  # effectively disabled
 
 
 @dataclass

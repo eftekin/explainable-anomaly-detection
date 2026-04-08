@@ -44,6 +44,8 @@ def heatmap_overlay(
     img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
     sm = score_map.squeeze().cpu().numpy()                   # (H, W)
+    sm = sm - sm.min()
+    sm = sm / (sm.max() + 1e-8)
     sm_uint8 = np.uint8(255 * np.clip(sm, 0, 1))
     heatmap = cv2.applyColorMap(sm_uint8, colormap)          # HWC BGR
 
