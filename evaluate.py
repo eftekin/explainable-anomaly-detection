@@ -69,15 +69,17 @@ def main():
             masks = batch["mask"]
             labels = batch["label"]
 
-            heatmap = model.anomaly_map(images)  # (1, 1, H, W)
-
-            # Image-level score = mean of top-1% pixels
-            heatmap_flat = heatmap.reshape(-1)
-            k = max(1, int(heatmap_flat.numel() * 0.01))
-            score = heatmap_flat.topk(k).values.mean().item()
+            # Image-level score: top-1% mean of raw per-pixel MSE (high = anomaly)
+            recon, _ = model(images)
+            raw_diff = (images - recon).pow(2).mean(dim=1)  # (1, H, W)
+            diff_flat = raw_diff.reshape(-1)
+            k = max(1, int(diff_flat.numel() * 0.01))
+            score = diff_flat.topk(k).values.mean().item()
             all_scores.append(score)
             all_labels.append(labels.item())
 
+            # Normalised heatmap for pixel-level AUROC and visualisation
+            heatmap = model.anomaly_map(images)  # (1, 1, H, W)
             all_score_maps.append(heatmap.squeeze().cpu().numpy())
             all_masks.append(masks.squeeze().numpy())
 
@@ -85,11 +87,15 @@ def main():
                 path = output_dir / f"{i:04d}_label{labels.item()}.png"
                 save_result(images[0].cpu(), heatmap[0].cpu(), path)
 
+    normal_scores = [s for s, l in zip(all_scores, all_labels) if l == 0]
+    anomaly_scores = [s for s, l in zip(all_scores, all_labels) if l == 1]
+    log.info(
+        f"Score check — normal mean: {sum(normal_scores)/len(normal_scores):.6f}  "
+        f"anomalous mean: {sum(anomaly_scores)/len(anomaly_scores):.6f}  "
+        f"(anomalous should be higher)"
+    )
+
     img_auc = image_auroc(all_scores, all_labels)
-    if img_auc < 0.5:
-        all_scores = [-s for s in all_scores]
-        img_auc = image_auroc(all_scores, all_labels)
-        log.info("Scores inverted — AUROC was below chance")
     log.info(f"Image-level AUROC: {img_auc:.4f}")
 
     # Pixel-level only where GT masks exist (anomalous samples)
