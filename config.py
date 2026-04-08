@@ -38,7 +38,7 @@ class TrainConfig:
     lambda_entropy: float = 0.001  # weight for entropy loss (memory)
 
     # Data
-    num_workers: int = 4
+    num_workers: int = 2
     pin_memory: bool = True
 
     # Checkpointing

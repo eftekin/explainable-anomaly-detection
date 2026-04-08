@@ -40,7 +40,7 @@ class SSIMLoss(nn.Module):
             scalar loss = 1 - mean_SSIM
         """
         C = pred.shape[1]
-        kernel = self.kernel.expand(C, 1, -1, -1)  # (C, 1, k, k)
+        kernel = self.kernel.to(pred.device).expand(C, 1, -1, -1)  # (C, 1, k, k)
 
         pad = self.window_size // 2
 
