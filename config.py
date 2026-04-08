@@ -19,6 +19,7 @@ class ModelConfig:
     # Memory module
     memory_size: int = 100  # number of memory slots
     memory_dim: int = 768  # must match embed_dim
+    use_memory: bool = False
 
     # Decoder
     # 4 stages: 24→48→96→192→384 (24 * 2^4 = 384 ✓)
@@ -46,7 +47,7 @@ class TrainConfig:
     checkpoint_dir: Path = Path("results/checkpoints")
 
     # Early stopping
-    patience: int = 30
+    patience: int = 50
 
 
 @dataclass

@@ -68,12 +68,11 @@ def main():
         memory_size=args.memory_size,
         embed_dim=model_cfg.embed_dim,
         decoder_channels=model_cfg.decoder_channels,
+        use_memory=model_cfg.use_memory,
     ).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-6
-    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
     criterion = TotalLoss(
         lambda_ssim=train_cfg.lambda_ssim,
         lambda_entropy=train_cfg.lambda_entropy,
@@ -109,7 +108,7 @@ def main():
             entropy_loss += losses["entropy"].item()
 
         n = len(train_loader)
-        scheduler.step(total_loss / n)
+        scheduler.step()
         log.info(
             f"Epoch [{epoch+1}/{args.epochs}]  "
             f"loss={total_loss/n:.4f}  "

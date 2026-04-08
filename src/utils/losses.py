@@ -121,9 +121,13 @@ class TotalLoss(nn.Module):
         self,
         pred: torch.Tensor,
         target: torch.Tensor,
-        attn_w: torch.Tensor,
+        attn_w: torch.Tensor | None,
     ) -> dict[str, torch.Tensor]:
         l_recon = self.recon_loss(pred, target)
-        l_entropy = self.entropy_loss(attn_w)
-        total = l_recon + self.lambda_entropy * l_entropy
+        if attn_w is not None:
+            l_entropy = self.entropy_loss(attn_w)
+            total = l_recon + self.lambda_entropy * l_entropy
+        else:
+            l_entropy = torch.tensor(0.0, device=pred.device)
+            total = l_recon
         return {"total": total, "recon": l_recon, "entropy": l_entropy}

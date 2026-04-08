@@ -27,8 +27,10 @@ class AnomalyAutoencoder(nn.Module):
         memory_size: int = 100,
         embed_dim: int = 768,
         decoder_channels: list[int] = None,
+        use_memory: bool = True,
     ):
         super().__init__()
+        self.use_memory = use_memory
         self.encoder = ViTEncoder(vit_model, freeze=freeze_encoder)
         self.memory = MemoryModule(memory_size, embed_dim)
         self.coord_attn = CoordinateAttention(embed_dim)
@@ -41,13 +43,17 @@ class AnomalyAutoencoder(nn.Module):
             epoch: current training epoch, forwarded to MemoryModule for logging
         Returns:
             recon:   (B, 3, 384, 384) – reconstructed image (tanh)
-            attn_w:  (B, H*W, M)      – memory attention weights for entropy loss
+            attn_w:  (B, H*W, M) or None when use_memory=False
         """
         # Encode
         z = self.encoder(x)            # (B, 768, 24, 24)
 
-        # Memory read – replace anomaly features with closest normal prototypes
-        z_mem, attn_w = self.memory(z, epoch=epoch)  # (B, 768, 24, 24), (B, 576, M)
+        if self.use_memory:
+            # Memory read – replace anomaly features with closest normal prototypes
+            z_mem, attn_w = self.memory(z, epoch=epoch)  # (B, 768, 24, 24), (B, 576, M)
+        else:
+            z_mem = z
+            attn_w = None
 
         # Coordinate attention for defect localization
         z_att = self.coord_attn(z_mem)  # (B, 768, 24, 24)
