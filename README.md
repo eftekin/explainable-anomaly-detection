@@ -1,8 +1,5 @@
 # Explainable Anomaly Detection in Industrial Images using Vision Transformers
 
-> Graduation Project — Haliç University, Department of Software Engineering  
-> **Student:** Mustafa Eftekin · **Advisor:** Asst. Prof. Büşra Şahin
-
 Unsupervised anomaly detection on the [MVTec AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) dataset using a ViT-based autoencoder with a memory module and coordinate attention. The model is trained **only on normal images** and produces pixel-level anomaly heatmaps at inference time.
 
 ---
