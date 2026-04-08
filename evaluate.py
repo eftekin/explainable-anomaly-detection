@@ -71,8 +71,8 @@ def main():
 
             heatmap = model.anomaly_map(images)  # (1, 1, H, W)
 
-            # Image-level score = max pixel score
-            score = heatmap.squeeze().cpu().max().item()
+            # Image-level score = mean pixel score
+            score = heatmap.squeeze().cpu().mean().item()
             all_scores.append(score)
             all_labels.append(labels.item())
 

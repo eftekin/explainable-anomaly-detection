@@ -7,6 +7,8 @@ Pipeline (Section 4.3 of the paper):
 Anomaly score is the pixel-wise L2 difference between input and reconstruction.
 """
 
+import numpy as np
+import scipy.ndimage as ndimage
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -78,4 +80,11 @@ class AnomalyAutoencoder(nn.Module):
         mins = flat.min(dim=1).values.view(B, 1, 1, 1)
         maxs = flat.max(dim=1).values.view(B, 1, 1, 1)
         heatmap = (diff - mins) / (maxs - mins + 1e-8)
+
+        # Gaussian smoothing (sigma=4) as described in the paper
+        heatmap_np = heatmap.squeeze(1).cpu().numpy()  # (B, H, W)
+        smoothed = np.stack([
+            ndimage.gaussian_filter(h, sigma=4.0) for h in heatmap_np
+        ])
+        heatmap = torch.from_numpy(smoothed).unsqueeze(1).to(diff.device)
         return heatmap

@@ -28,7 +28,7 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     # Table 1 hyperparameters
-    learning_rate: float = 0.0001
+    learning_rate: float = 0.0002
     batch_size: int = 8
     epochs: int = 200
     optimizer: str = "adam"
