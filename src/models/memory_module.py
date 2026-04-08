@@ -32,8 +32,11 @@ class MemoryModule(nn.Module):
         self.feature_dim = feature_dim
 
         # Learnable memory bank: (M, C)
+        # Initialise on the unit hypersphere so cosine similarities are
+        # discriminative from the first forward pass, matching the normalised
+        # encoder features (paper Eq. 7: d(z, m_i) = z·m_i^T / ‖z‖‖m_i‖).
         self.memory = nn.Parameter(
-            torch.randn(memory_size, feature_dim)
+            F.normalize(torch.randn(memory_size, feature_dim), dim=-1)
         )
 
     def forward(self, z: torch.Tensor, epoch: int | None = None):
@@ -69,13 +72,19 @@ class MemoryModule(nn.Module):
         w = F.softmax(scores, dim=-1)                          # (B, N, M)
         print(f"[MM] w (softmax)  : {tuple(w.shape)}  min={w.min():.6f}  max={w.max():.6f}  mean={w.mean():.6f}")
 
-        # Log per-slot weight statistics every 10 epochs to track slot differentiation
+        # Log per-slot weight statistics and memory gradient norm every 10 epochs
         if epoch is not None and epoch % 10 == 0:
             slot_w = w.detach().mean(dim=(0, 1))               # (M,)
+            grad_norm = (
+                self.memory.grad.norm().item()
+                if self.memory.grad is not None
+                else "None"
+            )
             print(
                 f"[MemoryModule] epoch {epoch:4d} | "
                 f"slot-w  mean={slot_w.mean().item():.4f}  "
-                f"std={slot_w.std().item():.4f}"
+                f"std={slot_w.std().item():.4f}  |  "
+                f"memory grad norm: {grad_norm}"
             )
 
         # Sparsification  (Eq. 10): shrinkage threshold λ = 1/M, then L1 normalise
