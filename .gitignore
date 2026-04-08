@@ -48,6 +48,9 @@ results/heatmaps/
 .DS_Store
 Thumbs.db
 
+# ── Project-specific ──────────────────────────────────────────────────────────
+paper.pdf
+
 # ── Misc ──────────────────────────────────────────────────────────────────────
 .mypy_cache/
 .pytest_cache/

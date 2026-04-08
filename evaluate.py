@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--category", default=data_cfg.category, choices=data_cfg.ALL_CATEGORIES)
+    p.add_argument("--category", default=data_cfg.category)
     p.add_argument("--data_root", default=str(data_cfg.data_root))
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--save_heatmaps", action="store_true")
