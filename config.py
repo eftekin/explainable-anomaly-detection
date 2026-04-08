@@ -18,24 +18,24 @@ class ModelConfig:
 
     # Memory module
     memory_size: int = 100  # number of memory slots
-    memory_dim: int = 768   # must match embed_dim
+    memory_dim: int = 768  # must match embed_dim
 
     # Decoder
     # 4 stages: 24→48→96→192→384 (24 * 2^4 = 384 ✓)
-    decoder_channels: list = field(default_factory=lambda: [512, 256, 128, 64])
+    decoder_channels: list = field(default_factory=lambda: [512, 256, 128, 64, 32, 16])
 
 
 @dataclass
 class TrainConfig:
     # Table 1 hyperparameters
     learning_rate: float = 0.0002
-    batch_size: int = 8
+    batch_size: int = 16
     epochs: int = 200
     optimizer: str = "adam"
 
     # Loss weights (from paper notation)
-    lambda_ssim: float = 1.0       # weight for SSIM term in reconstruction loss
-    lambda_entropy: float = 0.1    # weight for entropy loss (memory)
+    lambda_ssim: float = 1.0  # weight for SSIM term in reconstruction loss
+    lambda_entropy: float = 1.0  # weight for entropy loss (memory)
 
     # Data
     num_workers: int = 2
@@ -46,7 +46,7 @@ class TrainConfig:
     checkpoint_dir: Path = Path("results/checkpoints")
 
     # Early stopping
-    patience: int = 200  # effectively disabled
+    patience: int = 30
 
 
 @dataclass
@@ -58,8 +58,16 @@ class DataConfig:
     # MVTec AD categories
     TEXTURE_CATEGORIES = ["carpet", "grid", "leather", "tile", "wood"]
     OBJECT_CATEGORIES = [
-        "bottle", "cable", "capsule", "hazelnut", "metal_nut",
-        "pill", "screw", "toothbrush", "transistor", "zipper"
+        "bottle",
+        "cable",
+        "capsule",
+        "hazelnut",
+        "metal_nut",
+        "pill",
+        "screw",
+        "toothbrush",
+        "transistor",
+        "zipper",
     ]
     ALL_CATEGORIES = TEXTURE_CATEGORIES + OBJECT_CATEGORIES
 

@@ -69,7 +69,9 @@ def main():
     ).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6, verbose=True
+    )
     criterion = TotalLoss(
         lambda_ssim=train_cfg.lambda_ssim,
         lambda_entropy=train_cfg.lambda_entropy,
@@ -93,7 +95,7 @@ def main():
         for batch in train_loader:
             images = batch["image"].to(device)
 
-            recon, attn_w = model(images)
+            recon, attn_w = model(images, epoch=epoch)
             losses = criterion(recon, images, attn_w)
 
             optimizer.zero_grad()
@@ -104,8 +106,8 @@ def main():
             recon_loss += losses["recon"].item()
             entropy_loss += losses["entropy"].item()
 
-        scheduler.step()
         n = len(train_loader)
+        scheduler.step(total_loss / n)
         log.info(
             f"Epoch [{epoch+1}/{args.epochs}]  "
             f"loss={total_loss/n:.4f}  "

@@ -34,10 +34,11 @@ class AnomalyAutoencoder(nn.Module):
         self.coord_attn = CoordinateAttention(embed_dim)
         self.decoder = Decoder(embed_dim, decoder_channels)
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, epoch: int | None = None):
         """
         Args:
-            x: (B, 3, 384, 384)  – ImageNet-normalized input
+            x:     (B, 3, 384, 384)  – ImageNet-normalized input
+            epoch: current training epoch, forwarded to MemoryModule for logging
         Returns:
             recon:   (B, 3, 384, 384) – reconstructed image (tanh)
             attn_w:  (B, H*W, M)      – memory attention weights for entropy loss
@@ -46,7 +47,7 @@ class AnomalyAutoencoder(nn.Module):
         z = self.encoder(x)            # (B, 768, 24, 24)
 
         # Memory read – replace anomaly features with closest normal prototypes
-        z_mem, attn_w = self.memory(z)  # (B, 768, 24, 24), (B, 576, M)
+        z_mem, attn_w = self.memory(z, epoch=epoch)  # (B, 768, 24, 24), (B, 576, M)
 
         # Coordinate attention for defect localization
         z_att = self.coord_attn(z_mem)  # (B, 768, 24, 24)

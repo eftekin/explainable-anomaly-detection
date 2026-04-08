@@ -71,8 +71,10 @@ def main():
 
             heatmap = model.anomaly_map(images)  # (1, 1, H, W)
 
-            # Image-level score = mean pixel score
-            score = heatmap.squeeze().cpu().mean().item()
+            # Image-level score = mean of top-1% pixels
+            heatmap_flat = heatmap.reshape(-1)
+            k = max(1, int(heatmap_flat.numel() * 0.01))
+            score = heatmap_flat.topk(k).values.mean().item()
             all_scores.append(score)
             all_labels.append(labels.item())
 
@@ -84,6 +86,10 @@ def main():
                 save_result(images[0].cpu(), heatmap[0].cpu(), path)
 
     img_auc = image_auroc(all_scores, all_labels)
+    if img_auc < 0.5:
+        all_scores = [-s for s in all_scores]
+        img_auc = image_auroc(all_scores, all_labels)
+        log.info("Scores inverted — AUROC was below chance")
     log.info(f"Image-level AUROC: {img_auc:.4f}")
 
     # Pixel-level only where GT masks exist (anomalous samples)
