@@ -67,10 +67,34 @@ def evaluate(model: ViTMemoryAutoencoder, loader, device: torch.device):
     pix_scores = np.concatenate(all_pix_scores)
     pix_labels = np.concatenate(all_pix_labels)
 
-    img_auroc  = roc_auc_score(img_labels, img_scores)
+    img_auroc   = roc_auc_score(img_labels, img_scores)
     pixel_auroc = roc_auc_score(pix_labels, pix_scores)
 
+    _print_score_stats(img_scores, img_labels)
+
     return img_auroc, pixel_auroc
+
+
+def _print_score_stats(img_scores: np.ndarray, img_labels: np.ndarray) -> None:
+    """Print mean/min/max/std of image-level anomaly scores per group."""
+    normal  = img_scores[img_labels == 0]
+    anomaly = img_scores[img_labels == 1]
+
+    def stats(arr):
+        return arr.mean(), arr.min(), arr.max(), arr.std()
+
+    n_mean, n_min, n_max, n_std = stats(normal)
+    a_mean, a_min, a_max, a_std = stats(anomaly)
+
+    print("\n── Score statistics (image-level) ───────────────────────")
+    print(f"  Normal   (n={len(normal):3d})  mean={n_mean:.4f}  min={n_min:.4f}  max={n_max:.4f}  std={n_std:.4f}")
+    print(f"  Anomaly  (n={len(anomaly):3d})  mean={a_mean:.4f}  min={a_min:.4f}  max={a_max:.4f}  std={a_std:.4f}")
+
+    if n_mean > a_mean:
+        print("\n  [WARNING] Normal mean > Anomaly mean — scoring is INVERTED.")
+        print("            Anomalous images are getting lower scores than normal ones.")
+    else:
+        print(f"\n  [OK] Anomaly mean is {a_mean - n_mean:.4f} higher than normal mean.")
 
 
 def main(args) -> None:
