@@ -1,3 +1,3 @@
-from .dataset import MVTecDataset, get_transforms
+from .dataset import MVTecBottleDataset, get_train_loader, get_test_loader
 
-__all__ = ["MVTecDataset", "get_transforms"]
+__all__ = ["MVTecBottleDataset", "get_train_loader", "get_test_loader"]

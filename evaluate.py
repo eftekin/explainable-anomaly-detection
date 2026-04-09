@@ -1,113 +1,118 @@
 """
-Evaluation script – computes image-level and pixel-level AUROC on MVTec test set.
+Evaluation script — image-level and pixel-level AUROC on MVTec bottle.
 
 Usage:
-    python evaluate.py --category bottle --checkpoint results/checkpoints/bottle/best.pth
+    python evaluate.py --checkpoint checkpoints/best_model.pth \
+                       --data_root  ./data/mvtec/bottle
+
+Outputs:
+    Image-level AUROC: <score>
+    Pixel-level  AUROC: <score>
 """
 
 import argparse
-import logging
-from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from sklearn.metrics import roc_auc_score
+from tqdm import tqdm
 
-from config import model_cfg, data_cfg
-from src.data import MVTecDataset
-from src.models import AnomalyAutoencoder
-from src.utils import image_auroc, pixel_auroc, save_result
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger(__name__)
+from config import Config
+from src.models.autoencoder import ViTMemoryAutoencoder
+from src.data.dataset import get_test_loader
 
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--category", default=data_cfg.category)
-    p.add_argument("--data_root", default=str(data_cfg.data_root))
-    p.add_argument("--checkpoint", required=True)
-    p.add_argument("--save_heatmaps", action="store_true")
-    p.add_argument("--output_dir", default="results/heatmaps")
-    return p.parse_args()
+def _device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
-def main():
-    args = parse_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Dataset
-    test_dataset = MVTecDataset(
-        root=args.data_root,
-        category=args.category,
-        split="test",
-        image_size=model_cfg.image_size,
-    )
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=2)
-    log.info(f"Test samples: {len(test_dataset)}")
-
-    # Model
-    model = AnomalyAutoencoder(
-        vit_model=model_cfg.vit_model,
-        memory_size=model_cfg.memory_size,
-        embed_dim=model_cfg.embed_dim,
-        decoder_channels=model_cfg.decoder_channels,
-    ).to(device)
-
-    ckpt = torch.load(args.checkpoint, map_location=device)
-    model.load_state_dict(ckpt["model"])
+@torch.no_grad()
+def evaluate(model: ViTMemoryAutoencoder, loader, device: torch.device):
+    """
+    Returns:
+        img_auroc  : float  — image-level AUROC
+        pixel_auroc: float  — pixel-level  AUROC
+    """
     model.eval()
-    log.info(f"Loaded checkpoint from epoch {ckpt['epoch']+1}")
 
-    all_scores, all_labels = [], []
-    all_score_maps, all_masks = [], []
-    output_dir = Path(args.output_dir) / args.category
+    all_img_scores: list = []   # one scalar per image
+    all_img_labels: list = []   # 0=normal, 1=anomaly
+    all_pix_scores: list = []   # flattened per-pixel scores
+    all_pix_labels: list = []   # flattened per-pixel GT masks
 
-    with torch.no_grad():
-        for i, batch in enumerate(test_loader):
-            images = batch["image"].to(device)
-            masks = batch["mask"]
-            labels = batch["label"]
+    for imgs, masks, labels in tqdm(loader, desc="Evaluating"):
+        imgs   = imgs.to(device, non_blocking=True)
+        masks  = masks.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
-            # Image-level score: top-1% mean of raw per-pixel MSE (high = anomaly)
-            recon, _ = model(images)
-            raw_diff = (images - recon).pow(2).mean(dim=1)  # (1, H, W)
-            diff_flat = raw_diff.reshape(-1)
-            k = max(1, int(diff_flat.numel() * 0.01))
-            score = diff_flat.topk(k).values.mean().item()
-            all_scores.append(score)
-            all_labels.append(labels.item())
+        score_map = model.anomaly_score(imgs)  # (B, 1, H, W)
 
-            # Normalised heatmap for pixel-level AUROC and visualisation
-            heatmap = model.anomaly_map(images)  # (1, 1, H, W)
-            all_score_maps.append(heatmap.squeeze().cpu().numpy())
-            all_masks.append(masks.squeeze().numpy())
+        # Image-level score = max of the anomaly map (common in literature)
+        B = imgs.shape[0]
+        img_scores = score_map.reshape(B, -1).max(dim=1).values  # (B,)
 
-            if args.save_heatmaps:
-                path = output_dir / f"{i:04d}_label{labels.item()}.png"
-                save_result(images[0].cpu(), heatmap[0].cpu(), path)
+        all_img_scores.append(img_scores.cpu().numpy())
+        all_img_labels.append(labels.cpu().numpy())
 
-    normal_scores = [s for s, l in zip(all_scores, all_labels) if l == 0]
-    anomaly_scores = [s for s, l in zip(all_scores, all_labels) if l == 1]
-    log.info(
-        f"Score check — normal mean: {sum(normal_scores)/len(normal_scores):.6f}  "
-        f"anomalous mean: {sum(anomaly_scores)/len(anomaly_scores):.6f}  "
-        f"(anomalous should be higher)"
+        # Pixel-level
+        all_pix_scores.append(score_map.squeeze(1).cpu().numpy().ravel())
+        all_pix_labels.append(masks.squeeze(1).cpu().numpy().ravel())
+
+    img_scores = np.concatenate(all_img_scores)
+    img_labels = np.concatenate(all_img_labels)
+    pix_scores = np.concatenate(all_pix_scores)
+    pix_labels = np.concatenate(all_pix_labels)
+
+    img_auroc  = roc_auc_score(img_labels, img_scores)
+    pixel_auroc = roc_auc_score(pix_labels, pix_scores)
+
+    return img_auroc, pixel_auroc
+
+
+def main(args) -> None:
+    device = _device()
+    print(f"Device: {device}")
+
+    cfg = Config(
+        data_root=args.data_root,
+        encoder_name=args.encoder_name,
+        num_memory=args.num_memory,
+        memory_temperature=args.temperature,
     )
 
-    img_auc = image_auroc(all_scores, all_labels)
-    log.info(f"Image-level AUROC: {img_auc:.4f}")
+    model = ViTMemoryAutoencoder(
+        encoder_name=cfg.encoder_name,
+        embed_dim=cfg.embed_dim,
+        feat_side=cfg.feat_side,
+        num_memory=cfg.num_memory,
+        memory_temperature=cfg.memory_temperature,
+        ca_reduction=cfg.ca_reduction,
+    )
 
-    # Pixel-level only where GT masks exist (anomalous samples)
-    has_mask = [l == 1 for l in all_labels]
-    if any(has_mask):
-        pix_maps = np.stack([all_score_maps[i] for i, h in enumerate(has_mask) if h])
-        pix_masks = np.stack([all_masks[i] for i, h in enumerate(has_mask) if h])
-        pix_auc = pixel_auroc(pix_maps, pix_masks)
-        log.info(f"Pixel-level AUROC: {pix_auc:.4f}")
+    ckpt = torch.load(args.checkpoint, map_location="cpu")
+    model.load_state_dict(ckpt["model_state_dict"])
+    model = model.to(device)
+    print(f"Loaded checkpoint from epoch {ckpt['epoch']} (loss={ckpt['loss']:.4f})")
 
-    log.info("Evaluation complete.")
+    loader = get_test_loader(
+        cfg.data_root, cfg.img_size, batch_size=1, num_workers=cfg.num_workers
+    )
+
+    img_auroc, pixel_auroc = evaluate(model, loader, device)
+    print(f"\nImage-level AUROC : {img_auroc:.4f}")
+    print(f"Pixel-level  AUROC: {pixel_auroc:.4f}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint",   required=True,
+                        help="Path to saved checkpoint (.pth)")
+    parser.add_argument("--data_root",    default="./data/mvtec/bottle")
+    parser.add_argument("--encoder_name", default="google/vit-base-patch16-384")
+    parser.add_argument("--num_memory",   type=int,   default=100)
+    parser.add_argument("--temperature",  type=float, default=0.07)
+    main(parser.parse_args())

@@ -1,60 +1,45 @@
 """
-Coordinate Attention (CA) module.
+Coordinate Attention — Hou et al., CVPR 2021.
 
-Decomposes global average pooling into two 1-D pooling operations along H and W,
-then generates channel-wise attention weights that encode precise location information.
-This helps the decoder localize defects accurately.
+Separates spatial pooling into two 1-D operations:
+  • X-direction avg pool: (B, C, H, W) → (B, C, H, 1)
+  • Y-direction avg pool: (B, C, H, W) → (B, C, 1, W)
 
-Reference: Section 4.3.3 of the paper.
+Concatenate along the spatial dimension, shared conv + BN + h-swish,
+then split and produce two attention maps via 1×1 convs + Sigmoid.
+
+Input / Output: (B, C, H, W)
 """
 
 import torch
 import torch.nn as nn
-class CoordinateAttention(nn.Module):
-    """
-    Args:
-        in_channels (int): Number of input feature channels.
-        reduction (int):   Reduction ratio for the bottleneck MLP.
-    """
+import torch.nn.functional as F
 
+
+class CoordinateAttention(nn.Module):
     def __init__(self, in_channels: int, reduction: int = 32):
         super().__init__()
-        mid_channels = max(in_channels // reduction, 8)
+        mid = max(8, in_channels // reduction)
 
-        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))  # (B, C, H, 1)
-        self.pool_w = nn.AdaptiveAvgPool2d((1, None))  # (B, C, 1, W)
-
-        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(mid_channels)
-        self.act = nn.Hardswish(inplace=True)
-
-        self.conv_h = nn.Conv2d(mid_channels, in_channels, kernel_size=1, bias=False)
-        self.conv_w = nn.Conv2d(mid_channels, in_channels, kernel_size=1, bias=False)
+        self.conv_mid = nn.Conv2d(in_channels, mid, kernel_size=1, bias=False)
+        self.bn_mid   = nn.BatchNorm2d(mid)
+        self.conv_h   = nn.Conv2d(mid, in_channels, kernel_size=1)
+        self.conv_w   = nn.Conv2d(mid, in_channels, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, C, H, W)
-        Returns:
-            out: (B, C, H, W) – attention-weighted features
-        """
+        identity = x
         _, _, H, W = x.shape
 
-        # Horizontal and vertical pooling
-        x_h = self.pool_h(x)           # (B, C, H, 1)
-        x_w = self.pool_w(x)           # (B, C, 1, W)
-        x_w = x_w.permute(0, 1, 3, 2)  # (B, C, W, 1) – concatenate along H dim
+        pool_h  = x.mean(dim=3, keepdim=True)           # (B, C, H, 1)
+        pool_w  = x.mean(dim=2, keepdim=True)           # (B, C, 1, W)
+        pool_wt = pool_w.permute(0, 1, 3, 2)            # (B, C, W, 1)
 
-        # Concatenate and apply shared bottleneck
-        y = torch.cat([x_h, x_w], dim=2)  # (B, C, H+W, 1)
-        y = self.act(self.bn1(self.conv1(y)))
+        y = torch.cat([pool_h, pool_wt], dim=2)         # (B, C, H+W, 1)
+        y = F.hardswish(self.bn_mid(self.conv_mid(y)))  # (B, mid, H+W, 1)
 
-        # Split back
-        x_h_att, x_w_att = torch.split(y, [H, W], dim=2)
-        x_w_att = x_w_att.permute(0, 1, 3, 2)  # (B, mid, 1, W)
+        y_h, y_w = torch.split(y, [H, W], dim=2)        # (B,mid,H,1), (B,mid,W,1)
 
-        # Generate attention maps
-        att_h = torch.sigmoid(self.conv_h(x_h_att))  # (B, C, H, 1)
-        att_w = torch.sigmoid(self.conv_w(x_w_att))  # (B, C, 1, W)
+        a_h = torch.sigmoid(self.conv_h(y_h))                      # (B, C, H, 1)
+        a_w = torch.sigmoid(self.conv_w(y_w.permute(0, 1, 3, 2)))  # (B, C, 1, W)
 
-        return x * att_h * att_w
+        return identity * a_h * a_w

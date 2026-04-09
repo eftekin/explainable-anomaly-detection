@@ -1,16 +1,16 @@
 """
-Memory Module.
+Memory Module with temperature-scaled cosine similarity and sparsification.
 
-Stores M prototype feature vectors of normal samples.
-During the forward pass every spatial position in the input feature map is
-"read" from memory via softmax attention and replaced with the weighted sum
-of memory slots.  This forces the reconstruction to be normal-looking even
-when the input contains anomalies.
+Forward pass per query z:
+  1. Cosine similarity:  d(z, m_i) = z·m_i^T / (‖z‖·‖m_i‖)          [Eq. 7]
+  2. Temperature scale + softmax:  w = softmax(d / τ)                  [Eq. 8]
+  3. Sparsification:  ŵ_i = max(w_i-λ,0)·w_i / (|w_i-λ|+ε)          [Eq. 10]
+  4. L1 normalisation
+  5. Weighted sum:  ẑ = Σ ŵ_i · m_i                                   [Eq. 9]
 
-Reference: Section 4.3.2 of the paper.
+Input : F  (B, C, H_f, W_f)
+Output: F_hat (B, C, H_f, W_f),  w_hat (B, H_f*W_f, N)
 """
-
-from __future__ import annotations
 
 import torch
 import torch.nn as nn
@@ -18,74 +18,44 @@ import torch.nn.functional as F
 
 
 class MemoryModule(nn.Module):
-    """
-    Args:
-        memory_size (int): Number of memory slots M.
-        feature_dim (int): Dimensionality of each feature vector (768).
-    """
-
-    def __init__(self, memory_size: int = 100, feature_dim: int = 768):
+    def __init__(self, num_memory: int = 100, feature_dim: int = 768,
+                 temperature: float = 0.07, eps: float = 1e-8):
         super().__init__()
-        self.memory_size = memory_size
-        self.feature_dim = feature_dim
+        self.N = num_memory
+        self.C = feature_dim
+        self.temperature = temperature
+        self.eps = eps
+        self.lam = 1.0 / num_memory   # shrinkage threshold λ = 1/N
 
-        # Learnable memory bank: (M, C)
-        # Initialise on the unit hypersphere so cosine similarities are
-        # discriminative from the first forward pass, matching the normalised
-        # encoder features (paper Eq. 7: d(z, m_i) = z·m_i^T / ‖z‖‖m_i‖).
+        # Memory initialised on the unit hypersphere
         self.memory = nn.Parameter(
-            F.normalize(torch.randn(memory_size, feature_dim), dim=-1)
+            F.normalize(torch.randn(num_memory, feature_dim), dim=1)
         )
 
-    def forward(self, z: torch.Tensor, epoch: int | None = None):
-        """
-        Args:
-            z:     encoder feature map (B, C, H, W)
-            epoch: current training epoch; when provided and divisible by 10,
-                   logs per-slot weight statistics to stdout.
-        Returns:
-            z_hat:   memory-reconstructed features (B, C, H, W)
-            attn_w:  sparsified & L1-normalised attention weights (B, H*W, M)
-                     – used for entropy loss
-        """
-        B, C, H, W = z.shape
+    def forward(self, F_map: torch.Tensor):
+        B, C, H, W = F_map.shape
+        P = H * W
 
-        # Flatten spatial dims: (B, H*W, C)
-        z_flat = z.permute(0, 2, 3, 1).reshape(B, H * W, C)
+        # Flatten spatial dims: (B, C, H, W) → (B*P, C)
+        z = F_map.permute(0, 2, 3, 1).reshape(B * P, C)
 
-        # Normalize for cosine-like similarity
-        z_norm = F.normalize(z_flat, dim=-1)                   # (B, N, C)
-        mem_norm = F.normalize(self.memory, dim=-1)            # (M, C)
+        # ── Step 1 & 2: temperature-scaled cosine similarity + softmax ──
+        z_norm = F.normalize(z, dim=1)           # (B*P, C)
+        m_norm = F.normalize(self.memory, dim=1) # (N,   C)
+        scores = torch.mm(z_norm, m_norm.t()) / self.temperature  # (B*P, N)
+        w = F.softmax(scores, dim=-1)            # (B*P, N)
 
-        # Attention scores → softmax weights  (Eq. 7-8)
-        scores = torch.einsum("bnc,mc->bnm", z_norm, mem_norm)
-        w = F.softmax(scores, dim=-1)                          # (B, N, M)
+        # ── Step 3: Sparsification [Eq. 10] ──
+        diff = w - self.lam
+        w_hat = F.relu(diff) * w / (diff.abs() + self.eps)  # (B*P, N)
 
-        # Log per-slot weight statistics and memory gradient norm every 10 epochs
-        if epoch is not None and epoch % 10 == 0:
-            slot_w = w.detach().mean(dim=(0, 1))               # (M,)
-            grad_norm = (
-                self.memory.grad.norm().item()
-                if self.memory.grad is not None
-                else "None"
-            )
-            print(
-                f"[MemoryModule] epoch {epoch:4d} | "
-                f"slot-w  mean={slot_w.mean().item():.4f}  "
-                f"std={slot_w.std().item():.4f}  |  "
-                f"memory grad norm: {grad_norm}"
-            )
+        # ── Step 4: L1 normalisation ──
+        w_hat = w_hat / w_hat.sum(dim=1, keepdim=True).clamp(min=self.eps)
 
-        # Sparsification  (Eq. 10): shrinkage threshold λ = 1/M, then L1 normalise
-        lam = 1.0 / self.memory_size
-        eps = 1e-8
-        attn_w = F.relu(w - lam) * w / (torch.abs(w - lam) + eps)   # hard shrinkage
-        attn_w = attn_w / (attn_w.sum(dim=-1, keepdim=True) + eps)   # L1 normalise
+        # ── Step 5: Weighted sum [Eq. 9] ──
+        z_hat = torch.mm(w_hat, self.memory)    # (B*P, C)
 
-        # Read from memory: weighted sum of slots  (Eq. 9 with sparsified weights)
-        z_hat_flat = torch.einsum("bnm,mc->bnc", attn_w, self.memory)  # (B, N, C)
+        F_hat = z_hat.reshape(B, H, W, C).permute(0, 3, 1, 2)  # (B, C, H, W)
+        w_hat_spatial = w_hat.reshape(B, P, self.N)              # (B, P, N)
 
-        # Reshape back to spatial map
-        z_hat = z_hat_flat.reshape(B, H, W, C).permute(0, 3, 1, 2)    # (B, C, H, W)
-
-        return z_hat, attn_w
+        return F_hat, w_hat_spatial
