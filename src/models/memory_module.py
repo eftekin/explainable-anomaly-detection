@@ -1,16 +1,4 @@
-"""
-Memory Module with temperature-scaled cosine similarity and sparsification.
-
-Forward pass per query z:
-  1. Cosine similarity:  d(z, m_i) = z·m_i^T / (‖z‖·‖m_i‖)          [Eq. 7]
-  2. Temperature scale + softmax:  w = softmax(d / τ)                  [Eq. 8]
-  3. Sparsification:  ŵ_i = max(w_i-λ,0)·w_i / (|w_i-λ|+ε)          [Eq. 10]
-  4. L1 normalisation
-  5. Weighted sum:  ẑ = Σ ŵ_i · m_i                                   [Eq. 9]
-
-Input : F  (B, C, H_f, W_f)
-Output: F_hat (B, C, H_f, W_f),  w_hat (B, H_f*W_f, N)
-"""
+from __future__ import annotations
 
 import torch
 import torch.nn as nn
@@ -18,44 +6,54 @@ import torch.nn.functional as F
 
 
 class MemoryModule(nn.Module):
-    def __init__(self, num_memory: int = 100, feature_dim: int = 768,
-                 temperature: float = 0.07, eps: float = 1e-8):
+    """Content-addressable memory with Yang & Guo style sparsification."""
+
+    def __init__(
+        self,
+        num_slots: int,
+        embed_dim: int,
+        shrink_threshold: float = 0.0025,
+        shrink_gamma: float = 2.0,
+        temperature: float = 0.05,
+    ) -> None:
         super().__init__()
-        self.N = num_memory
-        self.C = feature_dim
+        self.num_slots = num_slots
+        self.shrink_threshold = shrink_threshold
+        self.shrink_gamma = shrink_gamma
         self.temperature = temperature
-        self.eps = eps
-        self.lam = 1.0 / num_memory   # shrinkage threshold λ = 1/N
 
-        # Memory initialised on the unit hypersphere
-        self.memory = nn.Parameter(
-            F.normalize(torch.randn(num_memory, feature_dim), dim=1)
-        )
+        self.memory = nn.Parameter(torch.empty(num_slots, embed_dim))
+        nn.init.trunc_normal_(self.memory, std=0.02)
 
-    def forward(self, F_map: torch.Tensor):
-        B, C, H, W = F_map.shape
-        P = H * W
+    def _address(self, query: torch.Tensor) -> torch.Tensor:
+        # Sharp softmax addressing with tau=0.05.
+        q = F.normalize(query, p=2, dim=1)
+        m = F.normalize(self.memory, p=2, dim=1)
+        sim = torch.mm(q, m.t()) / self.temperature
+        return F.softmax(sim, dim=1)
 
-        # Flatten spatial dims: (B, C, H, W) → (B*P, C)
-        z = F_map.permute(0, 2, 3, 1).reshape(B * P, C)
+    def _shrinkage(self, retrieved: torch.Tensor) -> torch.Tensor:
+        lam = (
+            self.shrink_gamma * self.shrink_threshold / (retrieved.abs() + 1e-8)
+        ).clamp(0, 1)
+        return retrieved.sign() * F.relu(retrieved.abs() * (1 - lam))
 
-        # ── Step 1 & 2: temperature-scaled cosine similarity + softmax ──
-        z_norm = F.normalize(z, dim=1)           # (B*P, C)
-        m_norm = F.normalize(self.memory, dim=1) # (N,   C)
-        scores = torch.mm(z_norm, m_norm.t()) / self.temperature  # (B*P, N)
-        w = F.softmax(scores, dim=-1)            # (B*P, N)
+    def _entropy(self, weights: torch.Tensor) -> torch.Tensor:
+        return -(weights * (weights + 1e-8).log()).sum(dim=1).mean()
 
-        # ── Step 3: Sparsification [Eq. 10] ──
-        diff = w - self.lam
-        w_hat = F.relu(diff) * w / (diff.abs() + self.eps)  # (B*P, N)
+    def forward(
+        self, features: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Map (B,D,H,W) -> retrieved features, entropy loss term, image-level slot usage."""
+        bsz, dim, h, w = features.shape
+        query = features.permute(0, 2, 3, 1).reshape(bsz * h * w, dim)
 
-        # ── Step 4: L1 normalisation ──
-        w_hat = w_hat / w_hat.sum(dim=1, keepdim=True).clamp(min=self.eps)
+        weights = self._address(query)
+        retrieved = torch.mm(weights, self.memory)
+        retrieved = self._shrinkage(retrieved)
+        entropy = self._entropy(weights)
 
-        # ── Step 5: Weighted sum [Eq. 9] ──
-        z_hat = torch.mm(w_hat, self.memory)    # (B*P, C)
+        retrieved = retrieved.reshape(bsz, h, w, dim).permute(0, 3, 1, 2)
+        weights_image = weights.reshape(bsz, h * w, self.num_slots).mean(dim=1)
 
-        F_hat = z_hat.reshape(B, H, W, C).permute(0, 3, 1, 2)  # (B, C, H, W)
-        w_hat_spatial = w_hat.reshape(B, P, self.N)              # (B, P, N)
-
-        return F_hat, w_hat_spatial
+        return retrieved, entropy, weights_image

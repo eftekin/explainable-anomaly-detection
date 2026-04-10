@@ -1,60 +1,25 @@
-# ── Python ────────────────────────────────────────────────────────────────────
+# macOS
+.DS_Store
+
+# Python bytecode and caches
 __pycache__/
 *.py[cod]
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-.eggs/
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# ── Environments ──────────────────────────────────────────────────────────────
-.env
+# Virtual environments
 .venv/
 venv/
-env/
 
-# ── Jupyter ───────────────────────────────────────────────────────────────────
+# Jupyter
 .ipynb_checkpoints/
-*.ipynb_checkpoints
 
-# ── Dataset (large binary files — download separately) ────────────────────────
-data/mvtec/
-data/btad/
-data/*.tar.xz
-data/*.zip
+# Local training artifacts
+checkpoints/
+outputs/
 
-# ── Model weights & results ───────────────────────────────────────────────────
-results/checkpoints/
-results/heatmaps/
-*.pth
-*.pt
-*.ckpt
-
-# ── HuggingFace cache ─────────────────────────────────────────────────────────
-.cache/huggingface/
-
-# ── IDE & AI tools ────────────────────────────────────────────────────────────
-.vscode/
-.idea/
-*.swp
-*~
-.claude/
-.cursorignore
-.cursorindexingignore
-.aider*
-
-# ── OS ────────────────────────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-
-# ── Project-specific ──────────────────────────────────────────────────────────
-paper.pdf
-
-# ── Misc ──────────────────────────────────────────────────────────────────────
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
-*.log
-notebooks/colab_train_eval.ipynb
-paper2.pdf
+# Local dataset artifacts
+data/

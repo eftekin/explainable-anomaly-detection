@@ -1,34 +1,55 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Dict
+
+import torch
 
 
 @dataclass
 class Config:
-    # ── Data ──────────────────────────────────────────────────────────────────
-    data_root: str = "./data/mvtec/bottle"
-    img_size: int = 384
-    batch_size: int = 8
-    num_workers: int = 4
+    # Data
+    CATEGORY: str = "bottle"
+    IMAGE_SIZE: int = 384
+    BATCH_SIZE: int = 8
+    NUM_WORKERS: int = 2
 
-    # ── Model ─────────────────────────────────────────────────────────────────
-    encoder_name: str = "google/vit-base-patch16-384"
-    embed_dim: int = 768          # ViT-Base hidden size
-    feat_side: int = 24           # 384 / 16 = 24 patches per side
-    num_memory: int = 100
-    memory_temperature: float = 0.07
-    ca_reduction: int = 32
+    # Encoder
+    ENCODER_MODEL: str = "vit_base_patch16_384"
+    EMBED_DIM: int = 768
+    PATCH_SIZE: int = 16
 
-    # ── Training ──────────────────────────────────────────────────────────────
-    epochs: int = 200
-    lr: float = 0.0002
-    freeze_epochs: int = 30       # encoder frozen for epochs 0 … 29
-    patience: int = 50            # early stopping
+    # Memory
+    NUM_SLOTS: int = 100
+    SHRINK_THRESHOLD: float = 0.0025
+    SHRINK_GAMMA: float = 2.0
+    MEM_TEMPERATURE: float = 0.05
 
-    # ── Loss weights (paper Table 1) ──────────────────────────────────────────
-    lambda_recon: float = 1.0
-    lambda_ssim: float = 1.0
-    lambda_ent: float = 0.001
+    # Training
+    LEARNING_RATE: float = 2e-4
+    ENCODER_LR_SCALE: float = 0.1
+    NUM_EPOCHS: int = 100
+    LAMBDA_ENT: float = 0.1
+    GRAD_CLIP: float = 1.0
+    FREEZE_UNTIL_EPOCH: int = 50
+    VARIANCE_THRESHOLD: float = 1e-4
 
-    # ── Paths ─────────────────────────────────────────────────────────────────
-    checkpoint_dir: str = "./checkpoints"
-    best_model_path: str = "./checkpoints/best_model.pth"
-    log_dir: str = "./logs"
+    # Scoring
+    TOP_K_RATIO: float = 0.1
+
+    # Paths
+    DATA_ROOT: str = "data/mvtec"
+    CHECKPOINT_PATH: str = "checkpoints"
+    OUTPUT_PATH: str = "outputs"
+
+    # Runtime
+    RANDOM_SEED: int = 42
+
+    def ensure_dirs(self) -> None:
+        Path(self.CHECKPOINT_PATH).mkdir(parents=True, exist_ok=True)
+        Path(self.OUTPUT_PATH).mkdir(parents=True, exist_ok=True)
+
+    def get_device(self) -> torch.device:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)

@@ -1,198 +1,137 @@
-# Explainable Anomaly Detection in Industrial Images using Vision Transformers
+# Explainable Anomaly Detection (ViT + Memory + Coordinate Attention)
 
-Unsupervised anomaly detection on the [MVTec AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) dataset using a ViT-based autoencoder with a memory module and coordinate attention. The model is trained **only on normal images** and produces pixel-level anomaly heatmaps at inference time.
+This repository contains a module-based implementation of unsupervised anomaly detection for MVTec AD.
 
----
+The pipeline is:
 
-## Architecture
+1. ViT encoder (timm vit_base_patch16_384)
+2. Memory module with sharp slot addressing
+3. Coordinate attention refinement
+4. Bilinear upsampling decoder
+5. Reconstruction-error based anomaly scoring
 
-```
-Input Image (384×384)
-        │
-        ▼
-┌───────────────┐
-│  ViT Encoder  │  pretrained google/vit-base-patch16-384
-│  patch 16×16  │  → (B, 768, 24, 24) feature map
-└───────┬───────┘
-        │
-        ▼
-┌───────────────┐
-│ Memory Module │  100 learnable normal prototypes
-│ (softmax read)│  anomaly features → replaced with nearest normal
-└───────┬───────┘
-        │
-        ▼
-┌──────────────────────┐
-│ Coordinate Attention │  H+W directional pooling for defect localization
-└───────┬──────────────┘
-        │
-        ▼
-┌─────────────┐
-│   Decoder   │  4× TransposedConv: 24→48→96→192→384
-└───────┬─────┘
-        │
-        ▼
-Reconstructed Image  ──diff──►  Anomaly Heatmap
-```
+Training uses only normal images (train/good). Evaluation is done on mixed normal and defect test images.
 
-**Loss:** `L = MSE(A, A') + λ_ssim·(1 − SSIM(A, A')) + λ_entropy·H(attn)`
+## Key Settings
 
-| Hyperparameter | Value |
-|---|---|
-| Input resolution | 384 × 384 |
-| Patch size | 16 × 16 |
-| Embedding dim | 768 |
-| Memory slots | 100 |
-| Optimizer | Adam |
-| Learning rate | 0.0002 |
-| Batch size | 8 |
-| Epochs | 200 |
-| λ_ssim | 1.0 |
-| λ_entropy | 0.001 |
+- Encoder: timm vit_base_patch16_384
+- Input size: 384 x 384
+- Embedding dim: 768
+- Memory slots: 100
+- Memory temperature: 0.05
+- Entropy weight: 0.1
+- Freeze epochs: 50 (encoder frozen first, then unfrozen)
+- Decoder: bilinear upsample + Conv2d (no ConvTranspose2d)
+- Image normalization: ImageNet mean/std
+- Image-level score: mean of top 10 percent reconstruction-error pixels
 
----
-
-## Project Structure
+## Repository Layout
 
 ```
 explainable-anomaly-detection/
-├── config.py                   # All hyperparameters
-├── train.py                    # Training script
-├── evaluate.py                 # AUROC evaluation + heatmap export
-├── src/
-│   ├── data/
-│   │   └── dataset.py          # MVTec AD dataset loader
-│   ├── models/
-│   │   ├── encoder.py          # ViT encoder
-│   │   ├── memory_module.py    # Memory module
-│   │   ├── coordinate_attention.py
-│   │   ├── decoder.py          # Transposed-conv decoder
-│   │   └── autoencoder.py      # Full pipeline + anomaly_map()
-│   └── utils/
-│       ├── losses.py           # MSE + SSIM + Entropy loss
-│       ├── metrics.py          # Image/pixel AUROC
-│       └── visualization.py    # Heatmap overlay
-├── app/
-│   └── backend/
-│       └── main.py             # FastAPI inference API
-├── notebooks/                  # Experiment notebooks
+├── LICENSE
+├── README.md
+├── config.py
+├── train.py
+├── evaluate.py
+├── requirements.txt
+├── train_colab.ipynb
 ├── data/
-│   └── mvtec/                  # Dataset (not tracked by git)
-└── results/
-    ├── checkpoints/            # Saved model weights (not tracked)
-    └── heatmaps/               # Output visualizations (not tracked)
+│   └── mvtec/
+└── src/
+    ├── __init__.py
+    ├── data/
+    │   ├── __init__.py
+    │   └── dataset.py
+    └── models/
+        ├── __init__.py
+        ├── autoencoder.py
+        ├── memory_module.py
+        ├── coordinate_attention.py
+        └── decoder.py
 ```
-
----
 
 ## Installation
 
 ```bash
-git clone https://github.com/eftekin/explainable-anomaly-detection.git
-cd explainable-anomaly-detection
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Python 3.10+ and PyTorch 2.0+ are required. GPU training is strongly recommended.
-
----
-
 ## Dataset
 
-Download MVTec AD from the [official page](https://www.mvtec.com/company/research/datasets/mvtec-ad) and extract it:
+Place MVTec AD under data/mvtec so the category folders are directly inside data/mvtec.
 
-```bash
-mkdir -p data/mvtec
-tar -xf mvtec_anomaly_detection.tar.xz -C data/mvtec/
-```
+Expected structure example:
 
-Expected structure:
 ```
 data/mvtec/
 ├── bottle/
 │   ├── train/good/
 │   ├── test/good/
-│   ├── test/broken_large/
-│   └── ground_truth/broken_large/
+│   └── ground_truth/
 ├── cable/
-└── ...  (15 categories total)
+└── ...
 ```
 
----
+## Training
 
-## Usage
-
-### Train
+Default run:
 
 ```bash
-# Train on a single category (default: bottle)
-python train.py --category bottle
-
-# Common options
-python train.py --category carpet --epochs 200 --batch_size 8 --lr 0.0002
+python train.py
 ```
 
-Checkpoints are saved to `results/checkpoints/<category>/`.
+Common options:
 
-### Evaluate
+```bash
+python train.py \
+  --category bottle \
+  --data-root data/mvtec \
+  --epochs 100 \
+  --batch-size 8 \
+  --num-workers 2 \
+  --checkpoint-path checkpoints \
+  --output-path outputs
+```
+
+Useful flags:
+
+- --seed INT
+- --no-pretrained
+
+Outputs:
+
+- checkpoints/best_model.pth
+- outputs/training_history.json
+
+## Evaluation
 
 ```bash
 python evaluate.py \
-    --category bottle \
-    --checkpoint results/checkpoints/bottle/best.pth \
-    --save_heatmaps
+  --category bottle \
+  --data-root data/mvtec \
+  --checkpoint checkpoints/best_model.pth \
+  --top-k-ratio 0.1 \
+  --output-path outputs
 ```
 
-Outputs image-level and pixel-level AUROC to the console.  
-Heatmap panels (original | overlay | binary mask) are saved to `results/heatmaps/`.
+Outputs:
 
-### Web API
+- Console summary (image-level and pixel-level AUROC)
+- outputs/evaluation_metrics.json
 
-```bash
-uvicorn app.backend.main:app --host 0.0.0.0 --port 8000 --reload
-```
+## Colab
 
-**Endpoints:**
+The notebook train_colab.ipynb provides a clean Colab flow:
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Liveness check |
-| `POST` | `/predict` | Upload image → anomaly score + base64 heatmap PNG |
+1. Install requirements
+2. Set Kaggle credentials
+3. Download/unpack MVTec AD
+4. Run python train.py
+5. Run python evaluate.py
 
-Example:
-```bash
-curl -X POST http://localhost:8000/predict \
-  -F "file=@sample.png" \
-  -F "threshold=0.5"
-```
+## License
 
-Response:
-```json
-{
-  "anomaly_score": 0.843,
-  "is_anomaly": true,
-  "heatmap_b64": "iVBORw0KGgo..."
-}
-```
-
----
-
-## Results
-
-| Category | Image AUROC | Pixel AUROC |
-|---|---|---|
-| bottle | — | — |
-| carpet | — | — |
-| *...* | — | — |
-
-> Results will be populated after full training runs.
-
----
-
-## References
-
-1. Dosovitskiy et al., *An Image is Worth 16x16 Words*, ICLR 2021
-2. Yang & Guo, *Unsupervised Industrial Anomaly Detection with ViT-Based Autoencoder*, Sensors 2024
-3. Bergmann et al., *MVTec AD — A Comprehensive Real-World Dataset*, CVPR 2019
-4. Defard et al., *PaDiM: A Patch Distribution Modeling Framework*, ICPR 2021
-5. Roth et al., *Towards Total Recall in Industrial Anomaly Detection*, CVPR 2022
+MIT License. See LICENSE.
