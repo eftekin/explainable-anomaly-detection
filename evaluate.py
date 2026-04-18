@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from scipy.ndimage import gaussian_filter
 from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -33,6 +34,8 @@ def evaluate(
     loader: DataLoader,
     device: torch.device,
     top_k_ratio: float,
+    gaussian_sigma: float,
+    top_k_pixels: int | None,
 ) -> tuple[float, float]:
     model.eval()
 
@@ -48,16 +51,26 @@ def evaluate(
             mask = batch["mask"]
 
             diff, _ = model.anomaly_map(x)
-            flat = diff[0, 0].cpu().flatten().numpy()
+            raw_map = diff[0, 0].cpu().numpy()
+            if gaussian_sigma > 0:
+                smooth_map = gaussian_filter(raw_map, sigma=gaussian_sigma)
+            else:
+                smooth_map = raw_map
 
-            k = max(1, int(top_k_ratio * len(flat)))
-            image_scores.append(float(np.sort(flat)[-k:].mean()))
+            flat_img = smooth_map.flatten()
+            flat_raw = raw_map.flatten()
+
+            if top_k_pixels is not None:
+                k = max(1, min(len(flat_img), int(top_k_pixels)))
+            else:
+                k = max(1, int(top_k_ratio * len(flat_img)))
+            image_scores.append(float(np.partition(flat_img, -k)[-k:].mean()))
             image_labels.append(label)
 
             if label == 1 and mask is not None:
                 gt = mask[0, 0].numpy().flatten()
                 if gt.max() > 0:
-                    pixel_scores.extend(flat.tolist())
+                    pixel_scores.extend(flat_raw.tolist())
                     pixel_labels.extend(gt.tolist())
 
     if len(set(image_labels)) < 2:
@@ -84,6 +97,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default="checkpoints/best_model.pth")
     parser.add_argument("--top-k-ratio", type=float, default=None)
+    parser.add_argument("--top-k-pixels", type=int, default=100)
+    parser.add_argument("--gaussian-sigma", type=float, default=4.0)
     parser.add_argument("--output-path", type=str, default=None)
     return parser.parse_args()
 
@@ -117,7 +132,14 @@ def main() -> None:
     model.load_state_dict(checkpoint["model"])
 
     test_loader = build_test_loader(cfg)
-    img_auroc, pix_auroc = evaluate(model, test_loader, device, cfg.TOP_K_RATIO)
+    img_auroc, pix_auroc = evaluate(
+        model,
+        test_loader,
+        device,
+        cfg.TOP_K_RATIO,
+        args.gaussian_sigma,
+        args.top_k_pixels,
+    )
 
     print("=" * 55)
     print("EVALUATION RESULTS")
@@ -125,7 +147,11 @@ def main() -> None:
     print(f"Category:          {cfg.CATEGORY}")
     print(f"Image-level AUROC: {img_auroc:.4f} ({img_auroc * 100:.1f}%)")
     print(f"Pixel-level AUROC: {pix_auroc:.4f} ({pix_auroc * 100:.1f}%)")
-    print(f"Top-k ratio:       {cfg.TOP_K_RATIO}")
+    if args.top_k_pixels is not None:
+        print(f"Top-k scoring:     top-{args.top_k_pixels} pixels")
+    else:
+        print(f"Top-k scoring:     top {cfg.TOP_K_RATIO * 100:.2f}%")
+    print(f"Gaussian sigma:    {args.gaussian_sigma}")
     print("Scoring direction: error up -> score up")
     print("=" * 55)
 
@@ -137,6 +163,8 @@ def main() -> None:
                 "image_auroc": img_auroc,
                 "pixel_auroc": pix_auroc,
                 "top_k_ratio": cfg.TOP_K_RATIO,
+                "top_k_pixels": args.top_k_pixels,
+                "gaussian_sigma": args.gaussian_sigma,
                 "checkpoint": str(checkpoint_path),
             },
             indent=2,
